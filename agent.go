@@ -24,6 +24,11 @@ import (
 //go:embed .env
 var envFile string
 
+var (
+	BuildTime string
+	CommitID  string
+)
+
 type ServerInfo struct {
 	IP       string     `json:"ip"`
 	Hostname string     `json:"hostname"`
@@ -49,8 +54,9 @@ type ConsulService struct {
 }
 
 var rootCmd = &cobra.Command{
-	Use:   "agent",
-	Short: "boong agent",
+	Use:     "agent",
+	Short:   "boong agent",
+	Version: BuildTime + "-" + CommitID,
 	Run: func(cmd *cobra.Command, args []string) {
 		ctx := context.Background()
 		if err := run(ctx); err != nil {

@@ -1,6 +1,8 @@
 #!/bin/bash
 
-ldflags="-s -w"
+buildTime=$(date +%FT%T%z)
+commitID=`git rev-parse --short=7 HEAD`
+ldflags="-s -w -X main.BuildTime=$buildTime -X main.CommitID=$commitID"
 target="agent"
 
 go env -w GOPROXY=https://goproxy.cn,direct
