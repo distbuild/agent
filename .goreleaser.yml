@@ -1,0 +1,24 @@
+---
+builds:
+  - id: agent
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+      - windows
+    goarch:
+      - amd64
+    dir: .
+    main: agent.go
+    binary: agent
+    flags:
+      - -trimpath
+    ldflags: -s -w -X main.BuildTime={{.Date}} -X main.CommitID={{.ShortCommit}}
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - Merge pull request
+      - Merge branch
