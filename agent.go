@@ -144,6 +144,7 @@ func run(ctx context.Context) error {
 		cmd := exec.Command(
 			"docker",
 			"run",
+			"--network=host",
 			"--rm",
 			workerDocker,
 		)
