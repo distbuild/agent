@@ -431,43 +431,59 @@ func getDiskInfo() ([]DiskInfo, error) {
 
 	switch runtime.GOOS {
 	case "linux":
-		cmd := exec.Command("lsblk", "-d", "-o", "NAME,SIZE", "-b", "--nodeps")
-		output, err := cmd.Output()
+		// 使用df命令获取挂载点的剩余空间
+		cmd := exec.Command("df", "-P", "-k")
+		output, err := cmd.CombinedOutput() // 同时捕获标准输出和错误
 		if err != nil {
-			// 尝试使用fdisk命令作为备选
-			cmd = exec.Command("fdisk", "-l")
-			output, err = cmd.Output()
-			if err != nil {
-				return nil, fmt.Errorf("failed to execute fdisk: %w", err)
-			}
-
-			lines := strings.Split(string(output), "\n")
-			for _, line := range lines {
-				if strings.HasPrefix(line, "Disk /dev/") {
-					// 解析行: "Disk /dev/sda: 1000.2 GB, 1000204886016 bytes, 1953525168 sectors"
-					fields := strings.Fields(line)
-					if len(fields) >= 4 {
-						name := strings.TrimPrefix(fields[1], "/dev/")
-						size := fields[3] + " " + fields[4]
-						disks = append(disks, DiskInfo{
-							Name: name,
-							Size: size,
-						})
-					}
-				}
-			}
-
-			if len(disks) > 0 {
-				return disks, nil
-			}
-
-			return nil, fmt.Errorf("failed to get disk info")
+			return nil, fmt.Errorf("df command failed: %w\nOutput: %s", err, string(output))
 		}
 
 		lines := strings.Split(string(output), "\n")
 		for i, line := range lines {
 			if i == 0 || strings.TrimSpace(line) == "" {
-				continue // 跳过标题行和空行
+				continue
+			}
+
+			fields := strings.Fields(line)
+			if len(fields) < 6 {
+				continue
+			}
+
+			source := fields[0]
+			availKB := fields[3]
+			mountPoint := fields[5]
+
+			// 过滤非物理磁盘设备
+			if !isPhysicalDisk(source) {
+				continue
+			}
+
+			availBytes, err := strconv.ParseInt(availKB, 10, 64)
+			if err != nil {
+				log.Printf("Failed to parse available KB: %v", err)
+				continue
+			}
+			availBytes *= 1024 // 转换为字节
+
+			disks = append(disks, DiskInfo{
+				Name: mountPoint,
+				Size: formatBytes(availBytes),
+			})
+		}
+
+	case "windows":
+		// 使用wmic获取逻辑磁盘的剩余空间
+		cmd := exec.Command("wmic", "logicaldisk", "where", "drivetype=3", "get", "deviceid,freespace")
+		output, err := cmd.Output()
+		if err != nil {
+			return nil, fmt.Errorf("failed to execute wmic: %w", err)
+		}
+
+		lines := strings.Split(string(output), "\n")
+		for _, line := range lines {
+			line = strings.TrimSpace(line)
+			if line == "" || strings.HasPrefix(line, "DeviceID") {
+				continue
 			}
 
 			fields := strings.Fields(line)
@@ -475,62 +491,19 @@ func getDiskInfo() ([]DiskInfo, error) {
 				continue
 			}
 
-			// 转换字节为人类可读格式
-			sizeBytes, err := strconv.ParseInt(fields[1], 10, 64)
+			deviceID := fields[0]
+			freeSpaceStr := fields[1]
+
+			freeSpace, err := strconv.ParseInt(freeSpaceStr, 10, 64)
 			if err != nil {
-				log.Printf("Failed to parse disk size: %v", err)
+				log.Printf("Failed to parse free space: %v", err)
 				continue
 			}
 
 			disks = append(disks, DiskInfo{
-				Name: fields[0],
-				Size: formatBytes(sizeBytes),
+				Name: deviceID,
+				Size: formatBytes(freeSpace),
 			})
-		}
-
-	case "windows":
-		cmd := exec.Command("wmic", "diskdrive", "get", "Caption,Size", "/format:list")
-		output, err := cmd.Output()
-		if err != nil {
-			return nil, fmt.Errorf("failed to execute wmic: %w", err)
-		}
-
-		lines := strings.Split(string(output), "\n\n")
-		for _, block := range lines {
-			if strings.TrimSpace(block) == "" {
-				continue
-			}
-
-			var name, size string
-			fields := strings.Split(block, "\n")
-			for _, field := range fields {
-				if strings.HasPrefix(field, "Caption=") {
-					name = strings.TrimPrefix(field, "Caption=")
-				} else if strings.HasPrefix(field, "Size=") {
-					sizeBytes := strings.TrimPrefix(field, "Size=")
-					if sizeBytes != "" {
-						sizeInt, err := strconv.ParseInt(sizeBytes, 10, 64)
-						if err != nil {
-							log.Printf("Failed to parse disk size: %v", err)
-							continue
-						}
-						size = formatBytes(sizeInt)
-					}
-				}
-			}
-
-			if name != "" && size != "" {
-				// 提取驱动器名称
-				nameParts := strings.Fields(name)
-				if len(nameParts) > 0 {
-					name = nameParts[0]
-				}
-
-				disks = append(disks, DiskInfo{
-					Name: name,
-					Size: size,
-				})
-			}
 		}
 
 	default:
@@ -542,6 +515,27 @@ func getDiskInfo() ([]DiskInfo, error) {
 	}
 
 	return disks, nil
+}
+
+// 新增辅助函数判断是否为物理磁盘
+func isPhysicalDisk(source string) bool {
+	// 排除常见虚拟设备
+	excluded := []string{
+		"tmpfs", "devtmpfs", "overlay", "squashfs", "udev", "proc",
+	}
+
+	// 检查是否排除的设备
+	for _, prefix := range excluded {
+		if strings.HasPrefix(source, prefix) {
+			return false
+		}
+	}
+
+	// 包含常见物理设备前缀
+	return strings.HasPrefix(source, "/dev/sd") ||
+		strings.HasPrefix(source, "/dev/nvme") ||
+		strings.HasPrefix(source, "/dev/mmcblk") ||
+		strings.HasPrefix(source, "/dev/vd")
 }
 
 // 将字节转换为人类可读的格式
@@ -596,7 +590,7 @@ func registerToConsul(info *ServerInfo) error {
 			"memory":       strconv.Itoa(info.Memory),
 			"disks":        string(disksJSON),
 			"ip":           info.IP,
-			"CreationTime": time.Now().UTC().Format(time.RFC3339), // 新增时间戳
+			"CreationTime": time.Now().In(getCSTLocation()).Format(time.RFC3339), // 新增时间戳
 		},
 		Check: struct {
 			TCP      string `json:"TCP"`
@@ -646,4 +640,13 @@ func registerToConsul(info *ServerInfo) error {
 	log.Println("Successfully registered to Consul with TCP check on port 22")
 
 	return nil
+}
+
+// 新增时区获取函数
+func getCSTLocation() *time.Location {
+	loc, err := time.LoadLocation("Asia/Shanghai")
+	if err != nil {
+		return time.FixedZone("CST", 8*60*60)
+	}
+	return loc
 }
