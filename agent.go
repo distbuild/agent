@@ -177,7 +177,11 @@ func loadEnvFile(content string) error {
 		key := strings.TrimSpace(parts[0])
 		value := strings.TrimSpace(parts[1])
 
-		_ = os.Setenv(key, value)
+		if _, ok := os.LookupEnv(key); !ok {
+			if err := os.Setenv(key, value); err != nil {
+				return err
+			}
+		}
 	}
 
 	return nil
